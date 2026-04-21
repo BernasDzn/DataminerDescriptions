@@ -293,11 +293,22 @@ local function readProceduralEffects(subType)
         end
 
         local effectCount = pItem:GetEffectCount()
+        local lastSkippedCLabel = nil  -- trigger label of last skipped (nil-action) non-chain effect
         for i = 0, effectCount - 1 do
             local eff    = pItem:GetEffect(i)
             local cond   = eff:GetConditionType()
             local aLabel = describeAction(eff, itemCfg)
-            if aLabel == nil then goto continue_effects end
+            if aLabel == nil then
+                -- Save the trigger label so a following CHAIN can use it as its parent.
+                if cond ~= 8 then
+                    local chance_ = eff:GetTriggerChance()
+                    local pct_    = (chance_ < 0.99) and string.format(" (%.0f%%)", chance_ * 100) or ""
+                    local cl_     = COND_LABEL[cond] or ("cond" .. tostring(cond))
+                    lastSkippedCLabel = (pct_ ~= "" and cl_:sub(-1) == ":")
+                        and (cl_:sub(1, -2) .. pct_ .. ":") or (cl_ .. pct_)
+                end
+                goto continue_effects
+            end
 
             local chance  = eff:GetTriggerChance()
             local pctStr  = (chance < 0.99) and string.format(" (%.0f%%)", chance * 100) or ""
@@ -311,6 +322,15 @@ local function readProceduralEffects(subType)
                 if detail[#detail] == "" then detail[#detail] = nil end
                 for _, dl in ipairs(detailedDescribeAction(eff, itemCfg)) do
                     table.insert(detail, "  , " .. dl)
+                end
+                table.insert(detail, "")
+            elseif cond == 8 and lastSkippedCLabel then
+                -- CHAIN whose parent was suppressed (e.g. area damage 0): use the saved trigger.
+                local chainPct = pctStr ~= "" and (" " .. pctStr) or ""
+                table.insert(lines, lastSkippedCLabel .. " " .. aLabel .. chainPct)
+                table.insert(detail, lastSkippedCLabel)
+                for _, dl in ipairs(detailedDescribeAction(eff, itemCfg)) do
+                    table.insert(detail, "  " .. dl)
                 end
                 table.insert(detail, "")
             else
@@ -327,6 +347,7 @@ local function readProceduralEffects(subType)
                 end
                 table.insert(detail, "")  -- blank spacer after each effect
             end
+            lastSkippedCLabel = nil
             ::continue_effects::
         end
 
@@ -356,6 +377,7 @@ local function readProceduralEffects(subType)
                 table.insert(eidParts, arrow .. " " .. icon .. " " .. sign .. string.format("%.2f", math.abs(s[1])) .. " " .. label)
             end
         end
+        local lastSkippedCLabel2 = nil  -- trigger label of last skipped non-chain effect (EID loop)
         for j = 0, effectCount - 1 do
             local eff2     = pItem:GetEffect(j)
             local cond2    = eff2:GetConditionType()
@@ -363,11 +385,21 @@ local function readProceduralEffects(subType)
             local chance2  = eff2:GetTriggerChance()
             local pct2     = (chance2 < 0.99) and string.format(" (%.0f%%)", chance2 * 100) or ""
 
-            if aLabel2 ~= nil then
+            if aLabel2 == nil then
+                if cond2 ~= 8 then
+                    local cl2_ = COND_LABEL[cond2] or ("cond" .. tostring(cond2))
+                    lastSkippedCLabel2 = (pct2 ~= "" and cl2_:sub(-1) == ":")
+                        and (cl2_:sub(1, -2) .. pct2 .. ":") or (cl2_ .. pct2)
+                end
+            else
                 if cond2 == 8 and #eidParts > 0 then
                     -- CHAIN: append action to the previous EID line with a comma
                     local chainPct2 = pct2 ~= "" and (" " .. pct2) or ""
                     eidParts[#eidParts] = eidParts[#eidParts] .. ", " .. aLabel2 .. chainPct2
+                elseif cond2 == 8 and lastSkippedCLabel2 then
+                    -- CHAIN whose parent was suppressed: reconstruct with saved trigger.
+                    local chainPct2 = pct2 ~= "" and (" " .. pct2) or ""
+                    table.insert(eidParts, lastSkippedCLabel2 .. " " .. aLabel2 .. chainPct2)
                 else
                     local cLabel2 = COND_LABEL[cond2] or ("cond" .. tostring(cond2))
                     -- Chance on the trigger: "Kill enemy (50%): uses X"
@@ -376,6 +408,7 @@ local function readProceduralEffects(subType)
                         or  (cLabel2 .. pct2)
                     table.insert(eidParts, cLabelPct2 .. " " .. aLabel2)
                 end
+                lastSkippedCLabel2 = nil
             end
             -- Inline first few lines of EID's own description for the referenced entity
             if EID then
@@ -501,7 +534,9 @@ MOD:AddCallback(ModCallbacks.MC_POST_UPDATE, function()
             and ent.Variant == PickupVariant.PICKUP_COLLECTIBLE then
                 local prev = S.preSnap[ent.InitSeed]
                 local curr = ent.SubType
-                if isGlitched(curr) and (prev == nil or not isGlitched(prev)) then
+                -- Also re-register when datamining an already-glitched pedestal:
+                -- the SubType changes to a new glitch ID even though prev was also glitched.
+                if isGlitched(curr) and (prev == nil or not isGlitched(prev) or prev ~= curr) then
                     local result  = readProceduralEffects(curr)
                     local effects = (result and result.lines)
                         or { "* glitch item", "* (install REPENTOGON", "*  for effect details)" }
