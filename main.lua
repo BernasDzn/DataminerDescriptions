@@ -480,10 +480,15 @@ local function injectEIDDesc(ent, result)
     if not EID then return end
     local desc = result and result.eidStr
     if not desc then return end
-    -- Persistent: survives pickup, shows for held items / EID tab panel
+    -- Persistent: survives pickup, shows for held items / EID tab panel.
+    -- EID's own blind handling suppresses this for pedestals when cursed.
     EID:addCollectible(ent.SubType, desc)
-    -- Highest-priority entity override while pedestal is on the floor
-    ent:GetData()["EID_Description"] = desc
+    -- Entity-level override forces the description on the floor pedestal.
+    -- Skip it during Curse of the Blind so we don't bypass EID's suppression.
+    local curses = Game():GetLevel():GetCurses()
+    if (curses & LevelCurse.CURSE_OF_BLIND) == 0 then
+        ent:GetData()["EID_Description"] = desc
+    end
 end
 
 local function snapshotPedestals()
